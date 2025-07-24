@@ -6,15 +6,18 @@ from sklearn.naive_bayes import GaussianNB
 from io import BytesIO
 import base64
 
-# Config
+# --- Settings ---
 SEQ_LENGTH = 10
 CLASSES = ['Low (≤1.5x)', 'Medium (1.51x–4x)', 'High (>4x)']
-input_buffer = deque(maxlen=SEQ_LENGTH)
-session_data = []
-X_train = []
-y_train = []
 
-# Classify multiplier
+# --- Global buffers ---
+input_buffer = deque(maxlen=SEQ_LENGTH)
+all_inputs = []        # Stores all user inputs
+X_train = []           # Features
+y_train = []           # Labels
+session_data = []      # For display & export
+
+# --- Labeling Logic ---
 def classify(x):
     if x <= 1.5:
         return "Low"
@@ -23,12 +26,12 @@ def classify(x):
     else:
         return "High"
 
-# Extract features for training/prediction
+# --- Feature Extraction ---
 def extract_features(seq):
     return [
         np.mean(seq),
         np.std(seq),
-        seq[-1],                # most recent value
+        seq[-1],
         min(seq),
         max(seq),
         seq.count(min(seq)),
@@ -37,63 +40,70 @@ def extract_features(seq):
         sum(1 for x in seq if x > 4.0)
     ]
 
-# Streamlit UI
-st.set_page_config(page_title="🧠 Aviator Predictor (Live Learning)", layout="centered")
-st.title("🛫 Aviator Predictor — Live ML Learning (No Pre-trained Model)")
-st.markdown("Manually enter the multiplier after each round. Starts learning and predicting after 10 entries.")
+# --- App UI ---
+st.set_page_config(page_title="🧠 Aviator Pattern Learner", layout="centered")
+st.title("🎯 Aviator Predictor: Live Pattern + Streak Learner")
+st.markdown("""
+Enter multipliers one by one.  
+The app will **start predicting from the 11th round** after learning patterns from the first 10.
+""")
 
-# Input form
-new_value = st.number_input("🎲 Enter multiplier from latest round (e.g., 1.23)", min_value=1.00, step=0.01, format="%.2f")
+# --- Input Section ---
+new_input = st.number_input("🎲 Enter new multiplier (e.g., 1.25)", min_value=1.00, step=0.01, format="%.2f")
 
 if st.button("➕ Submit Multiplier"):
-    input_buffer.append(float(new_value))
-
-    prediction_status = "⏳ Not enough data yet for prediction."
-    pred_label = ""
+    all_inputs.append(float(new_input))
+    prediction = ""
     confidence = ""
+    status = "🟡 Collecting initial 10 inputs..."
 
-    if len(input_buffer) == SEQ_LENGTH:
-        label = classify(float(new_value))
-        y_train.append(label)
-        features = extract_features(list(input_buffer))
-        X_train.append(features)
+    if len(all_inputs) >= 11:
+        # Train model using all previous data
+        for i in range(len(all_inputs) - SEQ_LENGTH):
+            window = all_inputs[i:i+SEQ_LENGTH]
+            label = classify(all_inputs[i + SEQ_LENGTH])
+            X_train.append(extract_features(window))
+            y_train.append(label)
 
-        if len(X_train) >= 10:
-            clf = GaussianNB()
-            clf.fit(X_train[:-1], y_train[:-1])  # Train without the current input
+        # Latest window for prediction
+        current_window = all_inputs[-SEQ_LENGTH:]
+        features = extract_features(current_window)
 
-            prob = clf.predict_proba([features])[0]
-            pred_class = np.argmax(prob)
-            pred_label = clf.classes_[pred_class]
-            confidence = prob[pred_class]
+        clf = GaussianNB()
+        clf.fit(X_train, y_train)
+        prob = clf.predict_proba([features])[0]
+        pred_class = np.argmax(prob)
+        prediction = clf.classes_[pred_class]
+        confidence = prob[pred_class]
 
-            if confidence < 0.6:
-                prediction_status = f"⚠️ WAIT — Low confidence ({confidence*100:.2f}%)"
-            else:
-                prediction_status = f"✅ Prediction: **{pred_label}** ({confidence*100:.2f}%)"
+        if confidence < 0.6:
+            status = f"⚠️ WAIT – Low confidence ({confidence*100:.2f}%)"
         else:
-            prediction_status = f"📊 Learning... Need {10 - len(X_train)} more rounds to predict."
+            status = f"✅ Prediction: **{prediction}** ({confidence*100:.2f}%)"
 
-    # Save to session
+    elif len(all_inputs) < 11:
+        status = f"🟡 Waiting for {11 - len(all_inputs)} more inputs to start predictions."
+
+    # --- Save round to session log ---
     session_data.append({
-        "Round": len(session_data) + 1,
-        "Multiplier": float(new_value),
-        "Prediction": pred_label,
+        "Round": len(all_inputs),
+        "Multiplier": float(new_input),
+        "Prediction": prediction,
         "Confidence": f"{confidence*100:.2f}%" if confidence else "",
-        "Status": prediction_status
+        "Status": status
     })
 
-    st.success(f"✅ Recorded round {len(session_data)} → {new_value}")
-    st.write(prediction_status)
+    st.success(f"✅ Recorded round {len(all_inputs)} → {new_input}")
+    st.write(status)
 
-# Display session history
+# --- Show Session Table ---
 if session_data:
     st.markdown("---")
-    st.subheader("📄 Session Summary")
+    st.subheader("📄 Live Session Summary")
     df = pd.DataFrame(session_data)
     st.dataframe(df)
 
-    # Manual Excel download
+    # --- Manual Excel Export ---
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='SessionData')

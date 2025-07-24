@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from collections import deque
 from sklearn.naive_bayes import GaussianNB
-from sklearn.preprocessing import LabelEncoder
 from io import BytesIO
 import base64
 
@@ -24,12 +23,12 @@ def classify(x):
     else:
         return "High"
 
-# Build features from sequence
+# Extract features for training/prediction
 def extract_features(seq):
     return [
         np.mean(seq),
         np.std(seq),
-        seq[-1],  # most recent value
+        seq[-1],                # most recent value
         min(seq),
         max(seq),
         seq.count(min(seq)),
@@ -39,11 +38,11 @@ def extract_features(seq):
     ]
 
 # Streamlit UI
-st.set_page_config(page_title="🧠 Aviator Live Predictor", layout="centered")
-st.title("🎯 Aviator Predictor (Live ML Learning)")
-st.markdown("Manually enter the last multiplier after each round. Starts learning and predicting after 10 entries.")
+st.set_page_config(page_title="🧠 Aviator Predictor (Live Learning)", layout="centered")
+st.title("🛫 Aviator Predictor — Live ML Learning (No Pre-trained Model)")
+st.markdown("Manually enter the multiplier after each round. Starts learning and predicting after 10 entries.")
 
-# Input
+# Input form
 new_value = st.number_input("🎲 Enter multiplier from latest round (e.g., 1.23)", min_value=1.00, step=0.01, format="%.2f")
 
 if st.button("➕ Submit Multiplier"):
@@ -54,16 +53,14 @@ if st.button("➕ Submit Multiplier"):
     confidence = ""
 
     if len(input_buffer) == SEQ_LENGTH:
-        # Add to training set
         label = classify(float(new_value))
         y_train.append(label)
         features = extract_features(list(input_buffer))
         X_train.append(features)
 
-        # Train model and predict if enough data
         if len(X_train) >= 10:
             clf = GaussianNB()
-            clf.fit(X_train[:-1], y_train[:-1])  # Exclude current one
+            clf.fit(X_train[:-1], y_train[:-1])  # Train without the current input
 
             prob = clf.predict_proba([features])[0]
             pred_class = np.argmax(prob)
@@ -77,7 +74,7 @@ if st.button("➕ Submit Multiplier"):
         else:
             prediction_status = f"📊 Learning... Need {10 - len(X_train)} more rounds to predict."
 
-    # Save to session log
+    # Save to session
     session_data.append({
         "Round": len(session_data) + 1,
         "Multiplier": float(new_value),
@@ -89,18 +86,18 @@ if st.button("➕ Submit Multiplier"):
     st.success(f"✅ Recorded round {len(session_data)} → {new_value}")
     st.write(prediction_status)
 
-# Table + Export
+# Display session history
 if session_data:
     st.markdown("---")
     st.subheader("📄 Session Summary")
     df = pd.DataFrame(session_data)
     st.dataframe(df)
 
+    # Manual Excel download
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='SessionData')
-        writer.save()
     buffer.seek(0)
     b64 = base64.b64encode(buffer.read()).decode()
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="aviator_session.xlsx">📥 Download Excel</a>'
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="aviator_session.xlsx">📥 Download Session as Excel</a>'
     st.markdown(href, unsafe_allow_html=True)

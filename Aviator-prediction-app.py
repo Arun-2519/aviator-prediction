@@ -1,31 +1,35 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from collections import deque
 from sklearn.naive_bayes import GaussianNB
+from collections import deque
 from io import BytesIO
 import base64
 
-# --- Config ---
+# --- Session State Initialization ---
+if "multipliers" not in st.session_state:
+    st.session_state.multipliers = []
+if "X_train" not in st.session_state:
+    st.session_state.X_train = []
+if "y_train" not in st.session_state:
+    st.session_state.y_train = []
+if "log" not in st.session_state:
+    st.session_state.log = []
+if "streak" not in st.session_state:
+    st.session_state.streak = 0
+
 SEQ_LENGTH = 10
-CLASSES = ['Low (≤1.5x)', 'Medium (1.51x–4x)', 'High (>4x)']
+MIN_TRAIN = 20
+CONF_THRESHOLD = 0.65
 
-# --- Buffers ---
-all_inputs = []
-X_train = []
-y_train = []
-session_data = []
-
-# --- Label function ---
-def classify(multiplier):
-    if multiplier <= 1.5:
+# --- Helper Functions ---
+def classify(mult):
+    if mult <= 1.5:
         return "Low"
-    elif multiplier <= 4.0:
+    elif mult <= 4.0:
         return "Medium"
-    else:
-        return "High"
+    return "High"
 
-# --- Feature builder ---
 def extract_features(seq):
     return [
         np.mean(seq),
@@ -33,82 +37,95 @@ def extract_features(seq):
         seq[-1],
         min(seq),
         max(seq),
-        seq.count(min(seq)),
-        seq.count(max(seq)),
         sum(1 for x in seq if x <= 1.5),
-        sum(1 for x in seq if x > 4.0)
+        sum(1 for x in seq if x > 4.0),
+        len(set(seq))  # uniqueness
     ]
 
-# --- App UI ---
-st.set_page_config(page_title="🧠 Aviator Predictor", layout="centered")
-st.title("🎯 Aviator Predictor – Mobile Friendly")
-st.markdown("Manually enter the multiplier after each round. Prediction starts after 10 inputs.")
+# --- UI ---
+st.set_page_config(page_title="✈️ Aviator Predictor AI", layout="centered")
+st.title("✈️ Aviator Predictor – Live Pattern AI")
+st.markdown("Enter each round's multiplier below. Predictions start after 10 inputs.")
 
-# --- Input ---
-multiplier = st.number_input("🎲 Enter multiplier (e.g. 2.15)", min_value=1.00, step=0.01, format="%.2f", key="user_input")
+# --- Input Section ---
+mult = st.number_input("🎲 Enter latest multiplier (e.g. 2.31)", min_value=1.0, step=0.01, format="%.2f")
+if st.button("➕ Submit Multiplier"):
+    st.session_state.multipliers.append(mult)
+    st.success(f"✅ Round {len(st.session_state.multipliers)} recorded → {mult}")
 
-if st.button("➕ Submit"):
-    all_inputs.append(float(multiplier))
-
-    prediction = ""
-    confidence = ""
-    status = "⏳ Learning..."
-
-    if len(all_inputs) >= SEQ_LENGTH + 1:
-        # Build training data from history
-        X_train.clear()
-        y_train.clear()
-
-        for i in range(len(all_inputs) - SEQ_LENGTH):
-            window = all_inputs[i:i + SEQ_LENGTH]
-            label = classify(all_inputs[i + SEQ_LENGTH])
-            X_train.append(extract_features(window))
-            y_train.append(label)
-
-        if len(X_train) >= 5:
-            model = GaussianNB()
-            model.fit(X_train, y_train)
-
-            current_window = all_inputs[-SEQ_LENGTH:]
-            features = extract_features(current_window)
-            probs = model.predict_proba([features])[0]
-            pred_index = np.argmax(probs)
-            prediction = model.classes_[pred_index]
-            confidence = probs[pred_index]
-
-            if confidence < 0.6:
-                status = f"⚠️ WAIT — Low confidence ({confidence*100:.2f}%)"
-            else:
-                status = f"✅ Prediction: **{prediction}** ({confidence*100:.2f}%)"
-        else:
-            status = "📊 Collecting more training data..."
-    else:
-        status = f"🟡 Waiting for {SEQ_LENGTH + 1 - len(all_inputs)} more inputs to start predictions."
-
-    # --- Save round log ---
-    session_data.append({
-        "Round": len(all_inputs),
-        "Multiplier": multiplier,
-        "Prediction": prediction,
-        "Confidence": f"{confidence*100:.2f}%" if confidence else "",
-        "Status": status
-    })
-
-    st.success(f"✅ Round {len(all_inputs)} recorded: {multiplier}")
-    st.info(status)
-
-# --- Show Table & Export ---
-if session_data:
+# --- Train model if 10+ entries ---
+if len(st.session_state.multipliers) > SEQ_LENGTH:
     st.markdown("---")
-    st.subheader("📄 Session History")
-    df = pd.DataFrame(session_data)
+    st.subheader("📡 Prediction Engine")
+
+    # Train model on past data
+    st.session_state.X_train.clear()
+    st.session_state.y_train.clear()
+
+    for i in range(len(st.session_state.multipliers) - SEQ_LENGTH):
+        window = st.session_state.multipliers[i:i+SEQ_LENGTH]
+        label = classify(st.session_state.multipliers[i+SEQ_LENGTH])
+        features = extract_features(window)
+        st.session_state.X_train.append(features)
+        st.session_state.y_train.append(label)
+
+    if len(st.session_state.X_train) >= 5:
+        clf = GaussianNB()
+        clf.fit(st.session_state.X_train, st.session_state.y_train)
+
+        current_window = st.session_state.multipliers[-SEQ_LENGTH:]
+        current_features = extract_features(current_window)
+        probs = clf.predict_proba([current_features])[0]
+        pred_index = np.argmax(probs)
+        pred_class = clf.classes_[pred_index]
+        conf = probs[pred_index]
+
+        if conf >= CONF_THRESHOLD:
+            st.audio("https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg", autoplay=True)
+            st.success(f"🎯 Prediction: **{pred_class}** | Confidence: {conf*100:.2f}%")
+        else:
+            st.audio("https://actions.google.com/sounds/v1/alarms/warning.ogg", autoplay=True)
+            st.warning(f"⚠️ WAIT — Low confidence ({conf*100:.2f}%)")
+
+        # --- Learn from actual input ---
+        actual = st.selectbox("🔍 Enter actual result:", ["Low", "Medium", "High"])
+        if st.button("✅ Confirm & Learn"):
+            correct = actual == pred_class
+            st.session_state.log.append({
+                "Prediction": pred_class,
+                "Confidence": f"{conf*100:.2f}%",
+                "Actual": actual,
+                "Result": "✅" if correct else "❌"
+            })
+
+            if correct:
+                st.session_state.streak = 0
+            else:
+                st.session_state.streak += 1
+
+            st.success(f"🔁 Learning complete. Added actual: {actual}")
+            st.session_state.multipliers.append(mult)
+            st.rerun()
+    else:
+        st.info("📊 Collecting more data to train...")
+
+else:
+    needed = SEQ_LENGTH + 1 - len(st.session_state.multipliers)
+    st.info(f"📥 Please enter {needed} more multipliers to begin predictions.")
+
+# --- History ---
+if st.session_state.log:
+    st.markdown("---")
+    st.subheader("📊 Prediction History")
+    df = pd.DataFrame(st.session_state.log)
     st.dataframe(df)
 
-    # Excel export
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='SessionData')
-    buffer.seek(0)
-    b64 = base64.b64encode(buffer.read()).decode()
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="aviator_session.xlsx">📥 Download Excel</a>'
-    st.markdown(href, unsafe_allow_html=True)
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Predictions')
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    link = f'<a href="data:application/octet-stream;base64,{b64}" download="aviator_history.xlsx">📥 Download Excel</a>'
+    st.markdown(link, unsafe_allow_html=True)
+
+st.caption("🤖 Built with Streamlit + Naive Bayes. Pattern-aware, confidence-based, and fully adaptive.")
